@@ -118,4 +118,40 @@ public class GroupServiceImpl implements GroupService {
         log.info("[GROUP] Found {} group(s) | user={}", groups.size(), userEmail);
         return groups.stream().map(this::toResponse).toList();
     }
+
+    @Override
+    @Transactional
+    public void deleteGroup(UUID groupId, String requesterEmail) {
+        log.info("[GROUP] Deleting group | groupId={} | requester={}", groupId, requesterEmail);
+        Group group = loadGroupById(groupId);
+        User requester = loadUserByEmail(requesterEmail);
+        
+        // Only creator can delete the group
+        if (!group.getCreatedBy().getId().equals(requester.getId())) {
+            throw new AccessDeniedException("Only the group creator can delete the group");
+        }
+        
+        groupRepository.delete(group);
+        log.info("[GROUP] Group deleted | groupId={}", groupId);
+    }
+
+    @Override
+    @Transactional
+    public void removeMember(UUID groupId, UUID userId, String requesterEmail) {
+        log.info("[GROUP] Removing member | groupId={} | userId={} | requester={}", groupId, userId, requesterEmail);
+        Group group = loadGroupById(groupId);
+        User requester = loadUserByEmail(requesterEmail);
+
+        if (!groupRepository.isUserMemberOfGroup(groupId, requester.getId())) {
+            throw new AccessDeniedException("You are not a member of this group");
+        }
+
+        boolean removed = group.getMembers().removeIf(u -> u.getId().equals(userId));
+
+        if (!removed) {
+            throw new ResourceNotFoundException("Member", "id", userId);
+        }
+        groupRepository.save(group);
+        log.info("[GROUP] Member removed | groupId={} | userId={}", groupId, userId);
+    }
 }

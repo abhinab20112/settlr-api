@@ -33,4 +33,14 @@ public interface GroupService {
      * @param userEmail email of the authenticated user
      */
     List<GroupResponse> getMyGroups(String userEmail);
+
+    /**
+     * Deletes a group entirely.
+     */
+    void deleteGroup(UUID groupId, String requesterEmail);
+
+    /**
+     * Removes a member from a group.
+     */
+    void removeMember(UUID groupId, UUID userId, String requesterEmail);
 }

@@ -61,4 +61,31 @@ public class GroupController {
         String userEmail = authentication.getName();
         return ResponseEntity.ok(groupService.getMyGroups(userEmail));
     }
+
+    /**
+     * DELETE /api/groups/{groupId}
+     * Deletes a group entirely. Only the creator can do this.
+     */
+    @DeleteMapping("/{groupId}")
+    public ResponseEntity<Void> deleteGroup(
+            @PathVariable UUID groupId,
+            Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        groupService.deleteGroup(groupId, requesterEmail);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * DELETE /api/groups/{groupId}/members/{userId}
+     * Removes a user from an existing group.
+     */
+    @DeleteMapping("/{groupId}/members/{userId}")
+    public ResponseEntity<Void> removeMember(
+            @PathVariable UUID groupId,
+            @PathVariable UUID userId,
+            Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        groupService.removeMember(groupId, userId, requesterEmail);
+        return ResponseEntity.noContent().build();
+    }
 }
