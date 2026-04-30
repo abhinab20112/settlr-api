@@ -46,6 +46,14 @@ public class Expense extends BaseEntity {
     @Column(nullable = false, length = 3)
     private String currency;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(255) default 'OTHER'")
+    @Builder.Default
+    private Category category = Category.OTHER;
+
+    @Column(nullable = true)
+    private String customCategory;
+
     /** How the expense is split among participants. */
     @OneToMany(mappedBy = "expense", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default

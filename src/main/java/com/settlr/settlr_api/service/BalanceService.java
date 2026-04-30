@@ -25,13 +25,29 @@ public interface BalanceService {
 
     /**
      * Records an actual payment from the authenticated user to another user in a group.
-     * Both the Settlement record and the UserBalance update happen in a single
-     * @Transactional method — if the balance update fails, the settlement record
-     * is also rolled back.
+     * The settlement is created in PENDING status. Balances are NOT updated yet.
      *
      * @param groupId    the group context
      * @param request    recipient email + amount
      * @param payerEmail authenticated user's email (from JWT)
      */
     RecordSettlementResponse recordSettlement(UUID groupId, RecordSettlementRequest request, String payerEmail);
+
+    /**
+     * Resolves a pending settlement (confirm or reject).
+     * Only the recipient can resolve it. If confirmed, balances are updated.
+     *
+     * @param groupId      the group context
+     * @param settlementId the settlement to resolve
+     * @param request      confirm flag
+     * @param userEmail    authenticated user's email (must be the recipient)
+     */
+    RecordSettlementResponse resolveSettlement(UUID groupId, UUID settlementId, ResolveSettlementRequest request, String userEmail);
+
+    /**
+     * Retrieves all pending settlements for a group.
+     *
+     * @param groupId the group context
+     */
+    java.util.List<RecordSettlementResponse> getPendingSettlements(UUID groupId);
 }

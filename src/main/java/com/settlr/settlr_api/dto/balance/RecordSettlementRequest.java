@@ -10,6 +10,9 @@ import java.math.BigDecimal;
  */
 public record RecordSettlementRequest(
 
+        @Email(message = "Payer must be a valid email")
+        String fromEmail,
+
         @NotBlank(message = "Recipient email is required")
         @Email(message = "Recipient must be a valid email")
         String toEmail,

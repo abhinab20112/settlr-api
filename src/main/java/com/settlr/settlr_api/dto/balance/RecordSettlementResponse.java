@@ -1,6 +1,8 @@
 
 package com.settlr.settlr_api.dto.balance;
 
+import com.settlr.settlr_api.entity.SettlementStatus;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -17,5 +19,7 @@ public record RecordSettlementResponse(
         UUID toUserId,
         String toName,
         BigDecimal amount,
-        Instant createdDate
+        SettlementStatus status,
+        Instant createdDate,
+        Instant resolvedDate
 ) {}

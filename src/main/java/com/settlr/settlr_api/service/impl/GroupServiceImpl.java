@@ -28,6 +28,7 @@ public class GroupServiceImpl implements GroupService {
 
     private final GroupRepository groupRepository;
     private final UserRepository userRepository;
+    private final com.settlr.settlr_api.repository.UserBalanceRepository userBalanceRepository;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -126,10 +127,22 @@ public class GroupServiceImpl implements GroupService {
         Group group = loadGroupById(groupId);
         User requester = loadUserByEmail(requesterEmail);
         
-        // Only creator can delete the group
-        if (!group.getCreatedBy().getId().equals(requester.getId())) {
-            throw new AccessDeniedException("Only the group creator can delete the group");
+        // Only a group member can delete the group
+        if (!groupRepository.isUserMemberOfGroup(groupId, requester.getId())) {
+            throw new AccessDeniedException("Only group members can delete the group");
         }
+
+        // Check for unsettled balances
+        boolean hasUnsettledBalances = userBalanceRepository.findAllByGroupId(groupId).stream()
+                .anyMatch(ub -> ub.getBalance().compareTo(java.math.BigDecimal.ZERO) != 0);
+
+        if (hasUnsettledBalances) {
+            throw new IllegalStateException("Cannot delete group: There are unsettled debts remaining.");
+        }
+        
+        // Delete all UserBalance records (even zero balances) before deleting the group 
+        // to prevent Hibernate TransientObjectException / ConstraintViolationException.
+        userBalanceRepository.deleteAll(userBalanceRepository.findAllByGroupId(groupId));
         
         groupRepository.delete(group);
         log.info("[GROUP] Group deleted | groupId={}", groupId);

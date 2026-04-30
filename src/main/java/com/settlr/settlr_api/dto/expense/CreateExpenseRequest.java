@@ -26,6 +26,10 @@ public record CreateExpenseRequest(
         @Size(min = 3, max = 3, message = "Currency must be a 3-letter ISO code (e.g. INR, USD)")
         String currency,
 
+        com.settlr.settlr_api.entity.Category category,
+
+        String customCategory,
+
         /**
          * Emails of participants who share this expense.
          * If null or empty → split among ALL group members.

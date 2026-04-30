@@ -46,5 +46,6 @@ public interface UserBalanceRepository extends JpaRepository<UserBalance, UUID> 
     /**
      * All balances in a group — used to render the full group settlement summary.
      */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"fromUser", "toUser"})
     List<UserBalance> findAllByGroupId(UUID groupId);
 }

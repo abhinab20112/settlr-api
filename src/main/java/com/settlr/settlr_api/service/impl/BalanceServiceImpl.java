@@ -117,6 +117,10 @@ public class BalanceServiceImpl implements BalanceService {
                     user.getName(), user.getEmail(), BigDecimal.ZERO, List.of());
         }
 
+        // Initialize lazy-loaded members on the main thread (which has an active Hibernate 
+        // Session via OpenSessionInView) so the background threads don't crash.
+        groups.forEach(g -> org.hibernate.Hibernate.initialize(g.getMembers()));
+
         // ── 2. Fetch each group's balances IN PARALLEL ───────────────────────
         List<CompletableFuture<GroupBalanceSummaryResponse>> futures = groups.stream()
                 .map(group -> CompletableFuture.supplyAsync(
@@ -186,6 +190,23 @@ public class BalanceServiceImpl implements BalanceService {
             userMap.putIfAbsent(toId, ub.getToUser());
         }
 
+        // ── 2.5 Adjust netMap for PENDING settlements ────────────────────────
+        // If Alice pays Bob $1150 and it's PENDING, her debt is effectively reduced
+        // in the suggested plan to avoid double-payment.
+        List<Settlement> pendingSettlements = settlementRepository.findAllByGroupIdAndStatus(
+                groupId, com.settlr.settlr_api.entity.SettlementStatus.PENDING);
+
+        for (Settlement pending : pendingSettlements) {
+            UUID fromId = pending.getFromUser().getId();
+            UUID toId = pending.getToUser().getId();
+            BigDecimal amount = pending.getAmount();
+
+            // The payer's negative balance is increased (made closer to 0)
+            netMap.merge(fromId, amount, BigDecimal::add);
+            // The receiver's positive balance is decreased (made closer to 0)
+            netMap.merge(toId, amount.negate(), BigDecimal::add);
+        }
+
         // ── 3. Run the min-cash-flow algorithm ───────────────────────────────
         List<SettlementTransaction> rawTxns = SettlementCalculator.calculate(netMap);
 
@@ -207,96 +228,157 @@ public class BalanceServiceImpl implements BalanceService {
                 group.getId(), group.getName(), transactions.size(), transactions);
     }
 
-    /*
-     * ═══════════════════════════════════════════════════════════════════════════
-     * TRANSACTIONAL ROLLBACK GUARANTEE
-     * ═══════════════════════════════════════════════════════════════════════════
-     *
-     * This method performs TWO database mutations inside a SINGLE @Transactional:
-     *   1. INSERT a Settlement record   ("Alice paid Bob $300")
-     *   2. UPDATE the UserBalance record (reduce Alice→Bob debt by $300)
-     *
-     * Because both operations share the same Spring-managed transaction:
-     *   - If step 2 fails (e.g., ObjectOptimisticLockingFailureException from
-     *     a @Version conflict on UserBalance), Spring will ROLL BACK the entire
-     *     transaction — including the Settlement INSERT from step 1.
-     *   - The database will NEVER contain a Settlement record without a
-     *     corresponding balance adjustment. This is the fundamental guarantee
-     *     of @Transactional: all-or-nothing.
-     *
-     * Without @Transactional, step 1 could auto-commit, and a failure in step 2
-     * would leave an orphaned Settlement record — money recorded as paid but
-     * the debt not reduced. That would be a data corruption bug.
-     * ═══════════════════════════════════════════════════════════════════════════
-     */
     @Override
     @Transactional
-    public RecordSettlementResponse recordSettlement(UUID groupId, RecordSettlementRequest request, String payerEmail) {
-        log.info("[SETTLE] Recording payment | groupId={} | payer={} | to={} | amount={}",
-                groupId, payerEmail, request.toEmail(), request.amount());
+    public RecordSettlementResponse recordSettlement(UUID groupId, RecordSettlementRequest request, String authenticatedEmail) {
+        log.info("[SETTLE] Initiating payment | groupId={} | authenticatedUser={} | from={} | to={} | amount={}",
+                groupId, authenticatedEmail, request.fromEmail(), request.toEmail(), request.amount());
 
-        // ── 1. Validate group, payer, and recipient ──────────────────────────
+        // ── 1. Determine roles ────────────────────────────────────────────────
+        String actualFromEmail = (request.fromEmail() != null && !request.fromEmail().isBlank()) 
+                ? request.fromEmail() : authenticatedEmail;
+        String actualToEmail = request.toEmail();
+
+        if (!authenticatedEmail.equals(actualFromEmail) && !authenticatedEmail.equals(actualToEmail)) {
+            throw new AccessDeniedException("You can only record payments you are involved in");
+        }
+
+        // ── 2. Validate group, payer, and recipient ──────────────────────────
         Group group = groupRepository.findById(groupId)
                 .orElseThrow(() -> new ResourceNotFoundException("Group", "id", groupId));
 
-        User payer = userRepository.findByEmail(payerEmail)
-                .orElseThrow(() -> new ResourceNotFoundException("User", "email", payerEmail));
+        User payer = userRepository.findByEmail(actualFromEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", actualFromEmail));
 
         if (!groupRepository.isUserMemberOfGroup(groupId, payer.getId())) {
-            throw new AccessDeniedException("You are not a member of this group");
+            throw new AccessDeniedException("User '" + actualFromEmail + "' is not a member of this group");
         }
 
-        User recipient = userRepository.findByEmail(request.toEmail())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "email", request.toEmail()));
+        User recipient = userRepository.findByEmail(actualToEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", actualToEmail));
 
         if (!groupRepository.isUserMemberOfGroup(groupId, recipient.getId())) {
-            throw new IllegalArgumentException(
-                    "User '" + request.toEmail() + "' is not a member of this group");
+            throw new IllegalArgumentException("User '" + actualToEmail + "' is not a member of this group");
         }
 
         if (payer.getId().equals(recipient.getId())) {
             throw new IllegalArgumentException("Cannot settle with yourself");
         }
 
-        // ── 2. Save the Settlement record ────────────────────────────────────
-        //    If step 3 below fails, THIS INSERT is also rolled back.
+        // ── 3. Save the Settlement record ────────────────────────────────────
+        // If receiver initiated it, auto-confirm it!
+        boolean isReceiverInitiated = authenticatedEmail.equals(actualToEmail);
+        com.settlr.settlr_api.entity.SettlementStatus initialStatus = isReceiverInitiated 
+                ? com.settlr.settlr_api.entity.SettlementStatus.CONFIRMED 
+                : com.settlr.settlr_api.entity.SettlementStatus.PENDING;
+
         Settlement settlement = Settlement.builder()
                 .group(group)
                 .fromUser(payer)
                 .toUser(recipient)
                 .amount(request.amount())
+                .status(initialStatus)
                 .build();
 
-        Settlement saved = settlementRepository.save(settlement);
-        log.info("[SETTLE] Settlement record saved | settlementId={}", saved.getId());
-
-        // ── 3. Update UserBalance ────────────────────────────────────────────
-        //    Payer is reducing their debt to recipient.
-        //    If a @Version conflict occurs here, the ObjectOptimisticLockingFailureException
-        //    propagates up, Spring rolls back the ENTIRE transaction (including step 2),
-        //    and we re-throw as BalanceConflictException for the client to retry.
-        try {
-            updateBalanceForSettlement(payer, recipient, group, request.amount());
-        } catch (ObjectOptimisticLockingFailureException ex) {
-            // The @Transactional rollback happens AUTOMATICALLY here because the
-            // exception propagates out of the transactional method. The Settlement
-            // record from step 2 is NOT committed.
-            log.error("[SETTLE] Optimistic lock conflict | settlementId={}", saved.getId(), ex);
-            throw new BalanceConflictException(
-                    "Concurrent balance update detected — please retry", ex);
+        if (isReceiverInitiated) {
+            settlement.setResolvedDate(java.time.Instant.now());
+            // Immediately update balances
+            try {
+                updateBalanceForSettlement(payer, recipient, group, request.amount());
+            } catch (ObjectOptimisticLockingFailureException ex) {
+                log.error("[SETTLE] Optimistic lock conflict while auto-confirming | from={} | to={}", payer.getEmail(), recipient.getEmail(), ex);
+                throw new BalanceConflictException("Concurrent balance update detected — please try clearing the debt again", ex);
+            }
         }
 
-        log.info("[SETTLE] Payment recorded successfully | {} → {} | {}",
-                payerEmail, request.toEmail(), request.amount());
+        Settlement saved = settlementRepository.save(settlement);
+        log.info("[SETTLE] Settlement record saved as PENDING | settlementId={}", saved.getId());
 
         return new RecordSettlementResponse(
                 saved.getId(),
                 group.getId(), group.getName(),
                 payer.getId(), payer.getName(),
                 recipient.getId(), recipient.getName(),
-                request.amount(),
-                saved.getCreatedDate()
+                saved.getAmount(),
+                saved.getStatus(),
+                saved.getCreatedDate(),
+                saved.getResolvedDate()
         );
+    }
+
+    @Override
+    @Transactional
+    public RecordSettlementResponse resolveSettlement(UUID groupId, UUID settlementId, ResolveSettlementRequest request, String userEmail) {
+        log.info("[SETTLE] Resolving payment | settlementId={} | confirm={} | user={}",
+                settlementId, request.confirm(), userEmail);
+
+        Settlement settlement = settlementRepository.findById(settlementId)
+                .orElseThrow(() -> new ResourceNotFoundException("Settlement", "id", settlementId));
+
+        if (!settlement.getGroup().getId().equals(groupId)) {
+            throw new IllegalArgumentException("Settlement does not belong to this group");
+        }
+
+        if (settlement.getStatus() != com.settlr.settlr_api.entity.SettlementStatus.PENDING) {
+            throw new IllegalArgumentException("Settlement is already " + settlement.getStatus());
+        }
+
+        User recipient = settlement.getToUser();
+        if (!recipient.getEmail().equals(userEmail)) {
+            throw new AccessDeniedException("Only the recipient can resolve this settlement");
+        }
+
+        if (request.confirm()) {
+            // Update balances
+            try {
+                updateBalanceForSettlement(settlement.getFromUser(), recipient, settlement.getGroup(), settlement.getAmount());
+            } catch (ObjectOptimisticLockingFailureException ex) {
+                log.error("[SETTLE] Optimistic lock conflict while confirming | settlementId={}", settlement.getId(), ex);
+                throw new BalanceConflictException(
+                        "Concurrent balance update detected — please retry confirming", ex);
+            }
+            settlement.setStatus(com.settlr.settlr_api.entity.SettlementStatus.CONFIRMED);
+        } else {
+            settlement.setStatus(com.settlr.settlr_api.entity.SettlementStatus.REJECTED);
+        }
+
+        settlement.setResolvedDate(java.time.Instant.now());
+        Settlement saved = settlementRepository.save(settlement);
+
+        return new RecordSettlementResponse(
+                saved.getId(),
+                saved.getGroup().getId(), saved.getGroup().getName(),
+                saved.getFromUser().getId(), saved.getFromUser().getName(),
+                saved.getToUser().getId(), saved.getToUser().getName(),
+                saved.getAmount(),
+                saved.getStatus(),
+                saved.getCreatedDate(),
+                saved.getResolvedDate()
+        );
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.List<RecordSettlementResponse> getPendingSettlements(UUID groupId) {
+        log.info("[SETTLE] Fetching pending settlements | groupId={}", groupId);
+
+        if (!groupRepository.existsById(groupId)) {
+            throw new ResourceNotFoundException("Group", "id", groupId);
+        }
+
+        return settlementRepository.findAllByGroupIdAndStatus(groupId, com.settlr.settlr_api.entity.SettlementStatus.PENDING)
+                .stream()
+                .map(s -> new RecordSettlementResponse(
+                        s.getId(),
+                        s.getGroup().getId(), s.getGroup().getName(),
+                        s.getFromUser().getId(), s.getFromUser().getName(),
+                        s.getToUser().getId(), s.getToUser().getName(),
+                        s.getAmount(),
+                        s.getStatus(),
+                        s.getCreatedDate(),
+                        s.getResolvedDate()
+                ))
+                .toList();
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────

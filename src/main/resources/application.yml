@@ -4,9 +4,9 @@ spring:
 
   # ── PostgreSQL DataSource ──────────────────────────────────────────────────
   datasource:
-    url: jdbc:postgresql://localhost:5432/smartsplit
-    username: postgres
-    password: harsh
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/smartsplit}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:harsh}
     driver-class-name: org.postgresql.Driver
 
   # ── JPA / Hibernate ───────────────────────────────────────────────────────
@@ -28,17 +28,17 @@ spring:
   # ── Redis ─────────────────────────────────────────────────────────────────
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
       timeout: 2000ms          # connection timeout
-      # password:              # uncomment if Redis auth is enabled
+      # password: ${SPRING_REDIS_PASSWORD:} # uncomment if Redis auth is enabled
 
 # ── JWT ───────────────────────────────────────────────────────────────────────
 # Secret MUST be Base64-encoded and decode to at least 32 bytes (256 bits) for HS256.
 # Replace this with a strong random secret before deploying to production.
 app:
   jwt:
-    secret: dGhpcy1pcy1hLXNlY3JldC1rZXktZm9yLXNldHRsci1hcGktZG9ub3QtdXNlLWluLXByb2R1Y3Rpb24=
+    secret: ${JWT_SECRET:dGhpcy1pcy1hLXNlY3JldC1rZXktZm9yLXNldHRsci1hcGktZG9ub3QtdXNlLWluLXByb2R1Y3Rpb24=}
     expiration-ms: 86400000    # 24 hours in milliseconds
 
 # ── Server ────────────────────────────────────────────────────────────────────
@@ -56,3 +56,9 @@ logging:
     org.hibernate.SQL: DEBUG                  # show SQL queries in terminal
     org.hibernate.orm.jdbc.bind: TRACE        # show bound SQL parameter values
 
+# ── Groq API Integration ──────────────────────────────────────────────────────
+groq:
+  api-key: ${GROQ_API_KEY}
+  base-url: https://api.groq.com/openai/v1
+  model: openai/gpt-oss-20b
+  timeout: 10

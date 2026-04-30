@@ -3,23 +3,33 @@ package com.settlr.settlr_api.controller;
 import com.settlr.settlr_api.dto.group.AddMemberRequest;
 import com.settlr.settlr_api.dto.group.CreateGroupRequest;
 import com.settlr.settlr_api.dto.group.GroupResponse;
+import com.settlr.settlr_api.entity.User;
+import com.settlr.settlr_api.exception.GroqException;
+import com.settlr.settlr_api.exception.ResourceNotFoundException;
+import com.settlr.settlr_api.repository.UserRepository;
 import com.settlr.settlr_api.service.GroupService;
+import com.settlr.settlr_api.service.ai.TripSummaryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/groups")
 @RequiredArgsConstructor
 public class GroupController {
 
     private final GroupService groupService;
+    private final TripSummaryService tripSummaryService;
+    private final UserRepository userRepository;
 
     /**
      * POST /api/groups
@@ -63,6 +73,33 @@ public class GroupController {
     }
 
     /**
+     * GET /api/groups/{groupId}/summary
+     * Returns an AI-generated trip summary for the group.
+     * On AI failure, returns 503 with fallback:true.
+     */
+    @GetMapping("/{groupId}/summary")
+    public ResponseEntity<?> getGroupSummary(
+            @PathVariable UUID groupId,
+            Authentication authentication) {
+
+        User user = resolveUser(authentication);
+
+        try {
+            TripSummaryService.TripSummary summary =
+                    tripSummaryService.generateSummary(groupId, user.getId());
+            return ResponseEntity.ok(summary);
+        } catch (GroqException e) {
+            log.warn("[SUMMARY] AI summary generation failed for group={}: {}", groupId, e.getMessage());
+            return ResponseEntity
+                    .status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of(
+                            "error", "AI trip summary temporarily unavailable",
+                            "fallback", true
+                    ));
+        }
+    }
+
+    /**
      * DELETE /api/groups/{groupId}
      * Deletes a group entirely. Only the creator can do this.
      */
@@ -87,5 +124,13 @@ public class GroupController {
         String requesterEmail = authentication.getName();
         groupService.removeMember(groupId, userId, requesterEmail);
         return ResponseEntity.noContent().build();
+    }
+
+    // ── Helper ───────────────────────────────────────────────────────────────
+
+    private User resolveUser(Authentication authentication) {
+        String email = authentication.getName();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", email));
     }
 }

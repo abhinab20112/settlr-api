@@ -16,4 +16,7 @@ public interface SettlementRepository extends JpaRepository<Settlement, UUID> {
 
     /** All settlements where a user paid someone in a group. */
     List<Settlement> findAllByGroupIdAndFromUserId(UUID groupId, UUID fromUserId);
+
+    /** Find all settlements with a specific status in a group. */
+    List<Settlement> findAllByGroupIdAndStatus(UUID groupId, com.settlr.settlr_api.entity.SettlementStatus status);
 }

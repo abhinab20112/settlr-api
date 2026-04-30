@@ -17,6 +17,8 @@ public record ExpenseResponse(
         String description,
         BigDecimal amount,
         String currency,
+        com.settlr.settlr_api.entity.Category category,
+        String customCategory,
         List<SplitResponse> splits,
         Instant createdDate
 ) {}

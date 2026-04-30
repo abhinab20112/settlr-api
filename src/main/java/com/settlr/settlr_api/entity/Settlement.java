@@ -43,4 +43,13 @@ public class Settlement extends BaseEntity {
     /** Amount paid — always positive, always BigDecimal. */
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
+
+    /** Settlement lifecycle: PENDING → CONFIRMED / REJECTED */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(255) default 'PENDING'")
+    @Builder.Default
+    private SettlementStatus status = SettlementStatus.PENDING;
+
+    /** Timestamp when the recipient confirmed/rejected. Null while PENDING. */
+    private java.time.Instant resolvedDate;
 }

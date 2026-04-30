@@ -53,4 +53,32 @@ public class SettlementController {
         return ResponseEntity
                 .ok(balanceService.recordSettlement(groupId, request, payerEmail));
     }
+
+    /**
+     * POST /api/groups/{groupId}/settle/{settlementId}/resolve
+     *
+     * Resolves a pending settlement. Only the recipient can do this.
+     */
+    @PostMapping("/{settlementId}/resolve")
+    public ResponseEntity<RecordSettlementResponse> resolveSettlement(
+            @PathVariable UUID groupId,
+            @PathVariable UUID settlementId,
+            @Valid @RequestBody com.settlr.settlr_api.dto.balance.ResolveSettlementRequest request,
+            Authentication authentication) {
+
+        String recipientEmail = authentication.getName();
+        return ResponseEntity
+                .ok(balanceService.resolveSettlement(groupId, settlementId, request, recipientEmail));
+    }
+
+    /**
+     * GET /api/groups/{groupId}/settle/pending
+     *
+     * Gets all pending settlements for a group.
+     */
+    @GetMapping("/pending")
+    public ResponseEntity<java.util.List<RecordSettlementResponse>> getPendingSettlements(
+            @PathVariable UUID groupId) {
+        return ResponseEntity.ok(balanceService.getPendingSettlements(groupId));
+    }
 }

@@ -14,6 +14,7 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -31,14 +32,33 @@ public class ExpenseServiceImpl implements ExpenseService {
     private final UserRepository userRepository;
     private final GroupRepository groupRepository;
     private final UserBalanceRepository userBalanceRepository;
+    private final com.settlr.settlr_api.service.ai.ExpenseCategoryService expenseCategoryService;
+    private final com.settlr.settlr_api.service.ai.InsightService insightService;
+    private final com.settlr.settlr_api.service.ai.TripSummaryService tripSummaryService;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional
     public ExpenseResponse createExpense(UUID groupId, CreateExpenseRequest request, String payerEmail) {
         log.info("[EXPENSE] Creating expense | group={} | payer={} | amount={} {}",
                 groupId, payerEmail, request.amount(), request.currency());
 
-        // ── 1. Load & validate ───────────────────────────────────────────────
+        /*
+         * [ARCHITECTURAL DECISION]
+         * We do not want a potentially slow 10-second external HTTP call to Groq 
+         * to hold open a database transaction (which holds a connection pool thread).
+         * Therefore, we call Groq BEFORE starting the programmatic transaction.
+         */
+        Category category = request.category();
+        if (category != null) {
+            log.info("[EXPENSE] Using user-provided category: {}", category);
+        } else {
+            category = expenseCategoryService.suggestCategory(request.description());
+            log.info("[EXPENSE] Auto-categorised by Groq: {}", category);
+        }
+        final Category finalCategory = category;
+
+        ExpenseResponse result = transactionTemplate.execute(status -> {
+            // ── 1. Load & validate ───────────────────────────────────────────────
         Group group = groupRepository.findById(groupId)
                 .orElseThrow(() -> new ResourceNotFoundException("Group", "id", groupId));
 
@@ -76,6 +96,8 @@ public class ExpenseServiceImpl implements ExpenseService {
                 .description(request.description())
                 .amount(request.amount())
                 .currency(request.currency().toUpperCase())
+                .category(finalCategory)
+                .customCategory(request.customCategory())
                 .build();
 
         // ── 5. Create ExpenseSplit records ────────────────────────────────────
@@ -107,6 +129,19 @@ public class ExpenseServiceImpl implements ExpenseService {
 
         // ── 7. Build response ────────────────────────────────────────────────
         return toResponse(saved);
+        });
+
+        // Evict cached AI insights so the user sees fresh data on next dashboard load.
+        // This runs AFTER the transaction commits successfully.
+        User payerForEviction = userRepository.findByEmail(payerEmail).orElse(null);
+        if (payerForEviction != null) {
+            insightService.evictInsights(payerForEviction.getId());
+        }
+
+        // Evict cached trip summaries for this group.
+        tripSummaryService.evictSummariesForGroup(groupId);
+
+        return result;
     }
 
     @Override
@@ -234,6 +269,8 @@ public class ExpenseServiceImpl implements ExpenseService {
                 expense.getDescription(),
                 expense.getAmount(),
                 expense.getCurrency(),
+                expense.getCategory(),
+                expense.getCustomCategory(),
                 splitResponses,
                 expense.getCreatedDate()
         );
