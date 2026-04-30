@@ -43,7 +43,7 @@ app:
 
 # ── Server ────────────────────────────────────────────────────────────────────
 server:
-  port: 8080
+  port: ${PORT:8080}
   error:
     include-message: always        # show exception messages in error responses
     include-binding-errors: always # show field-level validation errors

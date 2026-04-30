@@ -57,16 +57,19 @@ public class SecurityConfig {
         return new ProviderManager(List.of(authenticationProvider()));
     }
 
+    @org.springframework.beans.factory.annotation.Value("${FRONTEND_URL:http://localhost:5173}")
+    private String frontendUrl;
+
     // ── CORS ─────────────────────────────────────────────────────────────────
 
     /**
-     * CORS policy — restricts browser-based access to the Vite dev server only.
-     * In production, replace the origin with the deployed frontend URL.
+     * CORS policy — restricts browser-based access to the frontend URL.
+     * In production, the environment variable FRONTEND_URL defines the allowed origin.
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173"));       // Vite dev server
+        config.setAllowedOrigins(List.of(frontendUrl));       // Pulled from config/env
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
         config.setExposedHeaders(List.of("Authorization"));              // let JS read the header
