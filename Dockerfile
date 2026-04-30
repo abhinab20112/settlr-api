@@ -1,25 +1,29 @@
-# Stage 1: Build the application
-FROM maven:3.9.6-eclipse-temurin-21-jammy AS builder
+# Stage 1: Build
+FROM maven:3.9.6-eclipse-temurin-17-alpine AS builder
 WORKDIR /app
 
-# Copy the pom.xml and download dependencies
-# This step is cached as long as the pom.xml doesn't change
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 
-# Copy the source code and build the application
 COPY src ./src
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -Dmaven.compiler.fork=false
 
-# Stage 2: Run the application
-FROM eclipse-temurin:21-jre-jammy
+# Stage 2: Run
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
-# Copy the built jar from the builder stage
+# Install curl only (for health checks), clean cache in same layer
+RUN apk add --no-cache curl
+
 COPY --from=builder /app/target/*.jar app.jar
 
-# Expose the default port (optional, but good practice)
 EXPOSE 8080
 
-# Run the application
-ENTRYPOINT ["java", "-Xmx256m", "-jar", "app.jar"]
+ENTRYPOINT ["java", \
+  "-Xmx256m", \
+  "-Xms64m", \
+  "-XX:+UseSerialGC", \
+  "-XX:MaxMetaspaceSize=96m", \
+  "-XX:+OptimizeStringConcat", \
+  "-Djava.security.egd=file:/dev/./urandom", \
+  "-jar", "app.jar"]
