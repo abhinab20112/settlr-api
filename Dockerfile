@@ -23,7 +23,6 @@ ENTRYPOINT ["java", \
   "-Xmx256m", \
   "-Xms64m", \
   "-XX:+UseSerialGC", \
-  "-XX:MaxMetaspaceSize=96m", \
   "-XX:+OptimizeStringConcat", \
   "-Djava.security.egd=file:/dev/./urandom", \
   "-jar", "app.jar"]
